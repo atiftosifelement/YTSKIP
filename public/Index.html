@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YTSKIP – Child-Friendly YouTube Scene Skipper</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, 'Segoe UI', Roboto, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; background: #0a0f1e; color: #eef2ff; }
+        h1 { font-size: 1.8rem; margin-bottom: 0.2rem; display: flex; align-items: center; gap: 10px; }
+        .sub { color: #94a3b8; margin-bottom: 2rem; border-left: 3px solid #f59e0b; padding-left: 1rem; }
+        input, select, button, textarea { padding: 10px 14px; font-size: 1rem; border-radius: 12px; border: none; background: #1e293b; color: white; width: 100%; margin: 6px 0; }
+        button { background: #f59e0b; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:hover { background: #d97706; }
+        .card { background: #111827; border-radius: 24px; padding: 20px; margin: 20px 0; border: 1px solid #334155; }
+        details { background: #0f172a; border-radius: 20px; padding: 12px 20px; margin: 20px 0; }
+        summary { font-weight: bold; cursor: pointer; color: #fbbf24; }
+        .checkbox-group { display: flex; flex-wrap: wrap; gap: 15px; margin: 10px 0; }
+        .checkbox-group label { display: flex; align-items: center; gap: 6px; background: #1e293b; padding: 5px 12px; border-radius: 40px; }
+        #player { width: 100%; aspect-ratio: 16 / 9; background: black; border-radius: 20px; overflow: hidden; margin-top: 20px; }
+        #status { margin-top: 15px; padding: 12px; border-radius: 16px; background: #1e293b; font-size: 0.9rem; }
+        hr { border-color: #334155; margin: 20px 0; }
+        input[type="range"] { width: 100%; margin: 10px 0; }
+    </style>
+</head>
+<body>
+<h1><span>🎬</span> YTSKIP – Bollywood Clean Player</h1>
+<div class="sub">Paste any YouTube URL → skip whole scenes that contain bad words or unwanted content</div>
+
+<div class="card">
+    <input type="text" id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." value="https://www.youtube.com/watch?v=dQw4w9WgXcQ">
+    <button id="loadBtn">🎞️ Load & Clean Video</button>
+    <div id="status">Ready. Paste a URL and click above.</div>
+</div>
+
+<details open>
+    <summary>⚙️ Filtering criteria (what to skip)</summary>
+    <div style="margin-top: 15px;">
+        <h4>📝 Text filters (subtitles)</h4>
+        <div class="checkbox-group">
+            <label><input type="checkbox" id="filterProfanity" checked> Profanity (damn, bloody, etc)</label>
+            <label><input type="checkbox" id="filterViolenceWords" checked> Violent words (kill, murder)</label>
+        </div>
+        <label>➕ Custom blocked words (comma separated):</label>
+        <input type="text" id="customWords" placeholder="e.g., stupid, idiot, hell" value="stupid,fool">
+
+        <h4 style="margin-top: 15px;">🎚️ Scene sensitivity</h4>
+        <label>Max silence gap to join subtitles into a scene: <span id="gapValue">2.0</span> seconds</label>
+        <input type="range" id="sceneGap" min="0.5" max="5" step="0.1" value="2.0">
+        <label>Extra padding around whole scene: <span id="padValue">0</span> seconds</label>
+        <input type="range" id="padding" min="0" max="5" step="0.5" value="0">
+
+        <h4>⚡ Action for filtered content</h4>
+        <select id="actionType">
+            <option value="skip">Skip whole scene (seamless)</option>
+            <option value="mute">Mute audio only (show visual indicator)</option>
+        </select>
+    </div>
+</details>
+
+<div id="player"></div>
+
+<script>
+    let player = null;
+    let skipIntervals = [];
+    let checkInterval = null;
+
+    const loadBtn = document.getElementById('loadBtn');
+    const urlInput = document.getElementById('youtubeUrl');
+    const statusDiv = document.getElementById('status');
+    const sceneGapSlider = document.getElementById('sceneGap');
+    const gapSpan = document.getElementById('gapValue');
+    const paddingSlider = document.getElementById('padding');
+    const padSpan = document.getElementById('padValue');
+
+    sceneGapSlider.addEventListener('input', () => gapSpan.innerText = sceneGapSlider.value);
+    paddingSlider.addEventListener('input', () => padSpan.innerText = paddingSlider.value);
+
+    function getUserFilters() {
+        return {
+            filterProfanity: document.getElementById('filterProfanity').checked,
+            filterViolenceWords: document.getElementById('filterViolenceWords').checked,
+            customWords: document.getElementById('customWords').value,
+            sceneGapSeconds: parseFloat(sceneGapSlider.value),
+            paddingSeconds: parseFloat(paddingSlider.value)
+        };
+    }
+
+    async function loadVideo() {
+        const url = urlInput.value.trim();
+        if (!url) {
+            statusDiv.innerText = '❌ Please enter a YouTube URL';
+            return;
+        }
+        statusDiv.innerHTML = '⏳ Fetching subtitles and detecting bad scenes...';
+        const filters = getUserFilters();
+        try {
+            const response = await fetch('/api/get-skips', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, filters })
+            });
+            const data = await response.json();
+            if (data.error) {
+                statusDiv.innerHTML = `⚠️ ${data.error} — playing without skips.`;
+                skipIntervals = [];
+            } else {
+                skipIntervals = data.skipIntervals || [];
+                statusDiv.innerHTML = `✅ Found ${skipIntervals.length} bad scene(s) to skip.`;
+            }
+            const padding = filters.paddingSeconds;
+            if (padding > 0 && skipIntervals.length) {
+                skipIntervals = skipIntervals.map(seg => ({
+                    start: Math.max(0, seg.start - padding),
+                    end: seg.end + padding
+                }));
+                skipIntervals.sort((a,b) => a.start - b.start);
+                let merged = [];
+                for (let seg of skipIntervals) {
+                    if (merged.length === 0 || seg.start > merged[merged.length-1].end) merged.push(seg);
+                    else merged[merged.length-1].end = Math.max(merged[merged.length-1].end, seg.end);
+                }
+                skipIntervals = merged;
+            }
+            const videoId = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)/)[1];
+            if (!player) {
+                loadYouTubeAPI(videoId);
+            } else {
+                player.loadVideoById(videoId);
+                waitForPlayer();
+            }
+        } catch (err) {
+            console.error(err);
+            statusDiv.innerHTML = '❌ Network error. Make sure backend is running.';
+        }
+    }
+
+    function loadYouTubeAPI(videoId) {
+        if (window.YT && YT.Player) {
+            player = new YT.Player('player', {
+                height: '100%',
+                width: '100%',
+                videoId: videoId,
+                events: {
+                    onReady: () => waitForPlayer(),
+                    onStateChange: (e) => { if (e.data === YT.PlayerState.PLAYING) waitForPlayer(); }
+                }
+            });
+        } else {
+            const tag = document.createElement('script');
+            tag.src = 'https://www.youtube.com/iframe_api';
+            const firstScriptTag = document.getElementsByTagName('script')[0];
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+            window.onYouTubeIframeAPIReady = () => {
+                player = new YT.Player('player', {
+                    height: '100%',
+                    width: '100%',
+                    videoId: videoId,
+                    events: {
+                        onReady: () => waitForPlayer(),
+                        onStateChange: (e) => { if (e.data === YT.PlayerState.PLAYING) waitForPlayer(); }
+                    }
+                });
+            };
+        }
+    }
+
+    function waitForPlayer() {
+        if (checkInterval) clearInterval(checkInterval);
+        checkInterval = setInterval(() => {
+            if (!player || typeof player.getCurrentTime !== 'function') return;
+            const current = player.getCurrentTime();
+            for (let seg of skipIntervals) {
+                if (current >= seg.start && current < seg.end) {
+                    const action = document.getElementById('actionType').value;
+                    if (action === 'skip') {
+                        player.seekTo(seg.end, true);
+                        statusDiv.style.background = '#fef3c7';
+                        setTimeout(() => statusDiv.style.background = '', 200);
+                    } else if (action === 'mute') {
+                        player.mute();
+                        setTimeout(() => player.unMute(), (seg.end - current) * 1000);
+                        statusDiv.innerHTML = '🔇 Muted inappropriate scene';
+                        setTimeout(() => statusDiv.innerHTML = `✅ ${skipIntervals.length} bad scene(s) to skip`, 2000);
+                    }
+                    break;
+                }
+            }
+        }, 200);
+    }
+
+    function savePrefs() {
+        const prefs = {
+            filterProfanity: document.getElementById('filterProfanity').checked,
+            filterViolenceWords: document.getElementById('filterViolenceWords').checked,
+            customWords: document.getElementById('customWords').value,
+            sceneGap: sceneGapSlider.value,
+            padding: paddingSlider.value,
+            actionType: document.getElementById('actionType').value
+        };
+        localStorage.setItem('ytskipPrefs', JSON.stringify(prefs));
+    }
+
+    function loadPrefs() {
+        const saved = localStorage.getItem('ytskipPrefs');
+        if (saved) {
+            const p = JSON.parse(saved);
+            document.getElementById('filterProfanity').checked = p.filterProfanity ?? true;
+            document.getElementById('filterViolenceWords').checked = p.filterViolenceWords ?? true;
+            document.getElementById('customWords').value = p.customWords ?? '';
+            sceneGapSlider.value = p.sceneGap ?? 2.0;
+            paddingSlider.value = p.padding ?? 0;
+            document.getElementById('actionType').value = p.actionType ?? 'skip';
+            gapSpan.innerText = sceneGapSlider.value;
+            padSpan.innerText = paddingSlider.value;
+        }
+    }
+
+    function bindSaveEvents() {
+        const inputs = document.querySelectorAll('input, select, textarea');
+        inputs.forEach(el => el.addEventListener('change', savePrefs));
+    }
+
+    loadBtn.addEventListener('click', loadVideo);
+    loadPrefs();
+    bindSaveEvents();
+    savePrefs();
+</script>
+</body>
+</html>
