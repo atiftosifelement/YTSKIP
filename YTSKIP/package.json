@@ -1,0 +1,12 @@
+{
+  "name": "ytskip",
+  "version": "1.0.0",
+  "description": "Skip bad scenes in YouTube videos automatically",
+  "main": "api/get-skips.js",
+  "scripts": {
+    "start": "node api/get-skips.js"
+  },
+  "dependencies": {
+    "youtube-transcript-api": "^1.0.0"
+  }
+}
