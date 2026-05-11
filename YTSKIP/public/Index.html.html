@@ -61,12 +61,10 @@
 <div id="player"></div>
 
 <script>
-    // ---------- GLOBALS ----------
     let player = null;
     let skipIntervals = [];
     let checkInterval = null;
 
-    // DOM elements
     const loadBtn = document.getElementById('loadBtn');
     const urlInput = document.getElementById('youtubeUrl');
     const statusDiv = document.getElementById('status');
@@ -110,7 +108,6 @@
                 skipIntervals = data.skipIntervals || [];
                 statusDiv.innerHTML = `✅ Found ${skipIntervals.length} bad scene(s) to skip.`;
             }
-            // Apply user padding
             const padding = filters.paddingSeconds;
             if (padding > 0 && skipIntervals.length) {
                 skipIntervals = skipIntervals.map(seg => ({
