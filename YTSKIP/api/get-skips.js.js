@@ -41,7 +41,6 @@ function extractVideoId(url) {
 }
 
 module.exports = async (req, res) => {
-    // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -54,7 +53,6 @@ module.exports = async (req, res) => {
     const videoId = extractVideoId(url);
     if (!videoId) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
-    // Build bad word list from user filters
     let badWords = [];
     if (filters.filterProfanity) {
         badWords.push('bloody', 'bastard', 'damn', 'hell', 'fuck', 'shit', 'ass', 'bitch', 'whore', 'slut');
@@ -82,7 +80,6 @@ module.exports = async (req, res) => {
                 badScenes.push({ start: scene.start, end: scene.end });
             }
         }
-        // Merge overlapping bad scenes
         badScenes.sort((a,b) => a.start - b.start);
         const merged = [];
         for (const seg of badScenes) {
@@ -94,7 +91,7 @@ module.exports = async (req, res) => {
         }
         res.json({ skipIntervals: merged });
     } catch (err) {
-        console.error('Transcript error:', err);
+        console.error(err);
         res.json({ skipIntervals: [], error: 'Failed to fetch subtitles. Video may have no captions.' });
     }
 };
