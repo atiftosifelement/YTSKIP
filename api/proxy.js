@@ -1,6 +1,5 @@
 // api/proxy.js
 export default async function handler(req, res) {
-  // Enable CORS for your frontend
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -19,7 +18,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing video URL' });
   }
   
-  // Forward the request to your Replit app
   const replitUrl = 'https://asset-manager--atiftosif.replit.app/transcript';
   
   try {
@@ -29,8 +27,11 @@ export default async function handler(req, res) {
       body: JSON.stringify({ video_url: videoUrl })
     });
     
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const text = await response.text();
+    res.status(response.status);
+    const contentType = response.headers.get('content-type');
+    if (contentType) res.setHeader('Content-Type', contentType);
+    res.send(text);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
