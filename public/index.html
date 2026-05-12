@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YTSKIP – Child-Friendly YouTube Scene Skipper</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, 'Segoe UI', Roboto, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; background: #0a0f1e; color: #eef2ff; }
+        h1 { font-size: 1.8rem; margin-bottom: 0.2rem; display: flex; align-items: center; gap: 10px; }
+        .sub { color: #94a3b8; margin-bottom: 2rem; border-left: 3px solid #f59e0b; padding-left: 1rem; }
+        input, select, button, textarea { padding: 10px 14px; font-size: 1rem; border-radius: 12px; border: none; background: #1e293b; color: white; width: 100%; margin: 6px 0; }
+        button { background: #f59e0b; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:hover { background: #d97706; }
+        .card { background: #111827; border-radius: 24px; padding: 20px; margin: 20px 0; border: 1px solid #334155; }
+        details { background: #0f172a; border-radius: 20px; padding: 12px 20px; margin: 20px 0; }
+        summary { font-weight: bold; cursor: pointer; color: #fbbf24; }
+        .checkbox-group { display: flex; flex-wrap: wrap; gap: 15px; margin: 10px 0; }
+        .checkbox-group label { display: flex; align-items: center; gap: 6px; background: #1e293b; padding: 5px 12px; border-radius: 40px; }
+        #player { width: 100%; aspect-ratio: 16 / 9; background: black; border-radius: 20px; overflow: hidden; margin-top: 20px; }
+        #status { margin-top: 15px; padding: 12px; border-radius: 16px; background: #1e293b; font-size: 0.9rem; }
+        hr { border-color: #334155; margin: 20px 0; }
+        input[type="range"] { width: 100%; margin: 10px 0; }
+        .warning { background: #7f1d1d; color: #fecaca; padding: 10px; border-radius: 12px; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+<h1><span>🎬</span> YTSKIP – Bollywood Clean Player</h1>
+<div class="sub">Paste any YouTube URL → skip whole scenes that contain bad words</div>
+
+<div class="card">
+    <input type="text" id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." value="https://www.youtube.com/watch?v=NgBoMJy386M">
+    <button id="loadBtn">🎞️ Load & Clean Video</button>
+    <div id="status">Ready. Paste a URL and click above.</div>
+    <div class="warning" style="display:none" id="warningMsg">⚠️ Subtitles not available for this video. Playing without skips.</div>
+</div>
+
+<details open>
+    <summary>⚙️ Filtering criteria (what to skip)</summary>
+    <div style="margin-top: 15px;">
+        <h4>📝 Text filters (subtitles)</h4>
+        <div class="checkbox-group">
+            <label><input type="checkbox" id="filterProfanity" checked> Profanity (damn, bloody, etc)</label>
+            <label><input type="checkbox" id="filterViolenceWords" checked> Violent words (kill, murder)</label>
+        </div>
+        <label>➕ Custom blocked words (comma separated):</label>
+        <input type="text" id="customWords" placeholder="e.g., stupid, idiot, hell" value="stupid,fool">
+
+        <h4 style="margin-top: 15px;">🎚️ Scene sensitivity</h4>
+        <label>Max silence gap to join subtitles into a scene: <span id="gapValue">2.0</span> seconds</label>
+        <input type="range" id="sceneGap" min="0.5" max="5" step="0.1" value="2.0">
+        <label>Extra padding around whole scene: <span id="padValue">0</span> seconds</label>
+        <input type="range" id="padding" min="0" max="5" step="0.5" value="0">
+
+        <h4>⚡ Action for filtered content</h4>
+        <select id="actionType">
+            <option value="skip">Skip whole scene (seamless)</option>
+            <option value="mute">Mute audio only</option>
+        </select>
+    </div>
+</details>
+
+<div id="player"></div>
+
+<script>
+    let player = null;
+    let skipIntervals = [];
+    let checkInterval = null;
+
+    const loadBtn = document.getElementById('loadBtn');
+    const urlInput = document.getElementById('youtubeUrl');
+    const statusDiv = document.getElementById('status');
+    const warningDiv = document.getElementById('warningMsg');
+    const sceneGapSlider = document.getElementById('sceneGap');
+    const gapSpan = document.getElementById('gapValue');
+    const paddingSlider = document.getElementById('padding');
+    const padSpan = document.getElementById('padValue');
+
+    sceneGapSlider.addEventListener('input', () => gapSpan.innerText = sceneGapSlider.value);
+    paddingSlider.addEventListener('input', () => padSpan.innerText = paddingSlider.value);
+
+    function extractVideoId(url) {
+        const match = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)/);
+        return match ? match[1] : null;
+    }
+
+    function groupIntoScenes(entries, maxGapSec) {
+        if (!entries.length) return [];
+        const scenes = [];
+        let current = {
+            start: entries[0].start,
+            end: entries[0].end,
+            texts: [entries[0].text]
+        };
+        for (let i = 1; i < entries.length; i++) {
+            const gap = entries[i].start - entries[i-1].end;
+            if (gap > maxGapSec) {
+                scenes.push(current);
+                current = {
+                    start: entries[i].start,
+                    end: entries[i].end,
+                    texts: [entries[i].text]
+                };
+            } else {
+                current.end = entries[i].end;
+                current.texts.push(entries[i].text);
+            }
+        }
+        scenes.push(current);
+        return scenes;
+    }
+
+    function getBadWordsFromFilters() {
+        let words = [];
+        if (document.getElementById('filterProfanity').checked) {
+            words.push('bloody', 'bastard', 'damn', 'hell', 'fuck', 'shit', 'ass', 'bitch', 'whore', 'slut');
+        }
+        if (document.getElementById('filterViolenceWords').checked) {
+            words.push('kill', 'murder', 'rape', 'attack', 'slaughter', 'stab');
+        }
+        const custom = document.getElementById('customWords').value;
+        if (custom.trim()) {
+            custom.split(',').forEach(w => {
+                const clean = w.trim().toLowerCase();
+                if (clean) words.push(clean);
+            });
+        }
+        return [...new Set(words)];
+    }
+
+    async function fetchSubtitles(videoId) {
+        const response = await fetch('/api/getSubtitles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${videoId}` })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (!data.entries || data.entries.length === 0) {
+            throw new Error('No subtitle entries found');
+        }
+        return data.entries;
+    }
+
+    async function loadVideo() {
+        const url = urlInput.value.trim();
+        if (!url) {
+            statusDiv.innerText = '❌ Please enter a YouTube URL';
+            return;
+        }
+        
+        const videoId = extractVideoId(url);
+        if (!videoId) {
+            statusDiv.innerText = '❌ Invalid YouTube URL';
+            return;
+        }
+        
+        statusDiv.innerHTML = '⏳ Fetching subtitles...';
+        warningDiv.style.display = 'none';
+        
+        try {
+            const entries = await fetchSubtitles(videoId);
+            const badWords = getBadWordsFromFilters();
+            const sceneGap = parseFloat(sceneGapSlider.value);
+            const scenes = groupIntoScenes(entries, sceneGap);
+            
+            const badScenes = [];
+            for (const scene of scenes) {
+                const sceneText = scene.texts.join(' ');
+                let bad = false;
+                for (const word of badWords) {
+                    if (sceneText.toLowerCase().includes(word)) {
+                        bad = true;
+                        break;
+                    }
+                }
+                if (bad) {
+                    badScenes.push({ start: scene.start, end: scene.end });
+                }
+            }
+            
+            // Merge overlapping scenes
+            badScenes.sort((a,b) => a.start - b.start);
+            let merged = [];
+            for (const seg of badScenes) {
+                if (merged.length === 0 || seg.start > merged[merged.length-1].end) {
+                    merged.push(seg);
+                } else {
+                    merged[merged.length-1].end = Math.max(merged[merged.length-1].end, seg.end);
+                }
+            }
+            
+            const padding = parseFloat(paddingSlider.value);
+            if (padding > 0 && merged.length) {
+                merged = merged.map(seg => ({
+                    start: Math.max(0, seg.start - padding),
+                    end: seg.end + padding
+                }));
+                // re-merge after padding
+                let paddedMerged = [];
+                for (const seg of merged) {
+                    if (paddedMerged.length === 0 || seg.start > paddedMerged[paddedMerged.length-1].end) {
+                        paddedMerged.push(seg);
+                    } else {
+                        paddedMerged[paddedMerged.length-1].end = Math.max(paddedMerged[paddedMerged.length-1].end, seg.end);
+                    }
+                }
+                merged = paddedMerged;
+            }
+            
+            skipIntervals = merged;
+            statusDiv.innerHTML = `✅ Found ${skipIntervals.length} bad scene(s) to skip.`;
+            
+        } catch (err) {
+            console.error(err);
+            statusDiv.innerHTML = `⚠️ ${err.message || 'Failed to fetch subtitles'} — playing without skips.`;
+            warningDiv.style.display = 'block';
+            skipIntervals = [];
+        }
+        
+        // Load the YouTube player
+        if (!player) {
+            loadYouTubeAPI(videoId);
+        } else {
+            player.loadVideoById(videoId);
+            waitForPlayer();
+        }
+    }
+    
+    function loadYouTubeAPI(videoId) {
+        if (window.YT && YT.Player) {
+            player = new YT.Player('player', {
+                height: '100%',
+                width: '100%',
+                videoId: videoId,
+                events: {
+                    onReady: () => waitForPlayer(),
+                    onStateChange: (e) => { if (e.data === YT.PlayerState.PLAYING) waitForPlayer(); }
+                }
+            });
+        } else {
+            const tag = document.createElement('script');
+            tag.src = 'https://www.youtube.com/iframe_api';
+            const firstScriptTag = document.getElementsByTagName('script')[0];
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+            window.onYouTubeIframeAPIReady = () => {
+                player = new YT.Player('player', {
+                    height: '100%',
+                    width: '100%',
+                    videoId: videoId,
+                    events: {
+                        onReady: () => waitForPlayer(),
+                        onStateChange: (e) => { if (e.data === YT.PlayerState.PLAYING) waitForPlayer(); }
+                    }
+                });
+            };
+        }
+    }
+    
+    function waitForPlayer() {
+        if (checkInterval) clearInterval(checkInterval);
+        checkInterval = setInterval(() => {
+            if (!player || typeof player.getCurrentTime !== 'function') return;
+            const current = player.getCurrentTime();
+            for (let seg of skipIntervals) {
+                if (current >= seg.start && current < seg.end) {
+                    const action = document.getElementById('actionType').value;
+                    if (action === 'skip') {
+                        player.seekTo(seg.end, true);
+                        statusDiv.style.background = '#fef3c7';
+                        setTimeout(() => statusDiv.style.background = '', 200);
+                    } else if (action === 'mute') {
+                        player.mute();
+                        setTimeout(() => player.unMute(), (seg.end - current) * 1000);
+                        statusDiv.innerHTML = '🔇 Muted inappropriate scene';
+                        setTimeout(() => statusDiv.innerHTML = `✅ ${skipIntervals.length} bad scene(s) to skip`, 2000);
+                    }
+                    break;
+                }
+            }
+        }, 200);
+    }
+    
+    function savePrefs() {
+        const prefs = {
+            filterProfanity: document.getElementById('filterProfanity').checked,
+            filterViolenceWords: document.getElementById('filterViolenceWords').checked,
+            customWords: document.getElementById('customWords').value,
+            sceneGap: sceneGapSlider.value,
+            padding: paddingSlider.value,
+            actionType: document.getElementById('actionType').value
+        };
+        localStorage.setItem('ytskipPrefs', JSON.stringify(prefs));
+    }
+    
+    function loadPrefs() {
+        const saved = localStorage.getItem('ytskipPrefs');
+        if (saved) {
+            const p = JSON.parse(saved);
+            document.getElementById('filterProfanity').checked = p.filterProfanity ?? true;
+            document.getElementById('filterViolenceWords').checked = p.filterViolenceWords ?? true;
+            document.getElementById('customWords').value = p.customWords ?? '';
+            sceneGapSlider.value = p.sceneGap ?? 2.0;
+            paddingSlider.value = p.padding ?? 0;
+            document.getElementById('actionType').value = p.actionType ?? 'skip';
+            gapSpan.innerText = sceneGapSlider.value;
+            padSpan.innerText = paddingSlider.value;
+        }
+    }
+    
+    function bindSaveEvents() {
+        const inputs = document.querySelectorAll('input, select, textarea');
+        inputs.forEach(el => el.addEventListener('change', savePrefs));
+    }
+    
+    loadBtn.addEventListener('click', loadVideo);
+    loadPrefs();
+    bindSaveEvents();
+    savePrefs();
+</script>
+</body>
+</html>
